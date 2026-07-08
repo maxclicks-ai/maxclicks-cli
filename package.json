@@ -1,0 +1,52 @@
+{
+  "name": "maxclicks-cli",
+  "version": "1.0.0",
+  "description": "The official maxclicks command-line interface. Drive the maxclicks Public API from your terminal or an AI agent.",
+  "type": "module",
+  "bin": {
+    "maxclicks": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "maxclicks",
+    "cli",
+    "ai",
+    "crm",
+    "email",
+    "api"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/cli.js",
+    "check": "tsc --noEmit",
+    "start": "node dist/cli.js",
+    "sdk:link": "cd ../maxclicks-node && npm run build && npm pack --pack-destination ../maxclicks-cli",
+    "test": "echo 'No unit tests yet' && exit 0",
+    "prepublishOnly": "npm run build"
+  },
+  "author": "maxclicks",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxclicks-ai/maxclicks-cli"
+  },
+  "homepage": "https://github.com/maxclicks-ai/maxclicks-cli#readme",
+  "bugs": {
+    "url": "https://github.com/maxclicks-ai/maxclicks-cli/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "maxclicks": "file:maxclicks-1.0.0.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
