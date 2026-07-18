@@ -3,21 +3,34 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const DEFAULT_BASE_URL = 'https://api.maxclicks.ai/v1'
+const DEFAULT_WEB_ORIGIN = 'https://app.maxclicks.ai'
+
+export const LOGIN_TIMEOUT_MILLISECONDS = 5 * 60 * 1000
+export const LOGIN_POLL_INTERVAL_MILLISECONDS = 2 * 1000
+export const DEFAULT_LIST_PAGE_SIZE = 50
+export const CREATE_CLI_PAIRING_PATH = '/any/account/create-cli-pairing'
+export const CLAIM_CLI_PAIRING_PATH = '/any/account/claim-cli-pairing'
 
 export interface Profile {
   apiKey?: string
+  apiKeyId?: string
   baseUrl?: string
+  webOrigin?: string
 }
 
 export interface ResolvedConfig {
   apiKey: string | null
+  apiKeyId: string | null
   baseUrl: string
+  privateBaseUrl: string
+  webOrigin: string
   profile: string
 }
 
 export interface GlobalOptions {
   apiKey?: string
   baseUrl?: string
+  webOrigin?: string
   profile?: string
 }
 
@@ -38,12 +51,39 @@ function readConfigFile(): Record<string, Profile> {
   }
 }
 
-/** Persists an API key (and optional base URL) for a profile at ~/.config/maxclicks/config.json. */
-export function writeApiKey(profile: string, apiKey: string, baseUrl?: string): string {
+function writeProfile(profile: string, patch: (current: Profile) => Profile): string {
   const dir = configDir()
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const all = readConfigFile()
-  all[profile] = { ...all[profile], apiKey, ...(baseUrl ? { baseUrl } : {}) }
+  all[profile] = patch(all[profile] ?? {})
+  writeFileSync(getConfigPath(), JSON.stringify(all, null, 2) + '\n', { mode: 0o600 })
+  return getConfigPath()
+}
+
+/** Persists an API key (and optional base URL) for a profile at ~/.config/maxclicks/config.json. */
+export function writeApiKey(profile: string, apiKey: string, baseUrl?: string): string {
+  return writeProfile(profile, current => ({ ...current, apiKey, ...(baseUrl ? { baseUrl } : {}) }))
+}
+
+/** Persists a full login session (key, its id, and the base URL it was minted against) for a profile. */
+export function writeSession(
+  profile: string,
+  session: { apiKey: string; apiKeyId: string; baseUrl?: string }
+): string {
+  return writeProfile(profile, current => ({
+    ...current,
+    apiKey: session.apiKey,
+    apiKeyId: session.apiKeyId,
+    ...(session.baseUrl ? { baseUrl: session.baseUrl } : {}),
+  }))
+}
+
+/** Removes a profile's stored credentials entirely. */
+export function clearProfile(profile: string): string {
+  const dir = configDir()
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  const all = readConfigFile()
+  delete all[profile]
   writeFileSync(getConfigPath(), JSON.stringify(all, null, 2) + '\n', { mode: 0o600 })
   return getConfigPath()
 }
@@ -53,8 +93,15 @@ export function resolveConfig(options: GlobalOptions): ResolvedConfig {
   const profile = options.profile || process.env.MAXCLICKS_PROFILE || 'default'
   const file = readConfigFile()[profile] ?? {}
   const apiKey = options.apiKey || process.env.MAXCLICKS_API_KEY || file.apiKey || null
+  const apiKeyId = file.apiKeyId || null
   const baseUrl = options.baseUrl || process.env.MAXCLICKS_BASE_URL || file.baseUrl || DEFAULT_BASE_URL
-  return { apiKey, baseUrl, profile }
+  const webOrigin = options.webOrigin || process.env.MAXCLICKS_WEB_ORIGIN || file.webOrigin || DEFAULT_WEB_ORIGIN
+  return { apiKey, apiKeyId, baseUrl, privateBaseUrl: derivePrivateBaseUrl(baseUrl), webOrigin, profile }
+}
+
+function derivePrivateBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '')
+  return /\/v1$/.test(trimmed) ? trimmed.replace(/\/v1$/, '/private') : `${trimmed}/private`
 }
 
 /** Masks a key for display: keeps the first 6 and last 4 characters. */
