@@ -90,17 +90,6 @@ export async function apiRequest(options: GlobalOptions, request: ApiRequest): P
   return envelope.data !== undefined ? envelope.data : envelope
 }
 
-/**
- * Makes a raw authenticated request and returns the response body verbatim as
- * text (for endpoints that stream non-JSON payloads, e.g. an import's CSV
- * failure log). Throws a `MaxclicksError` on any non-2xx response.
- */
-export async function apiRequestText(options: GlobalOptions, request: ApiRequest): Promise<string> {
-  const result = await send(options, request)
-  if (!result.ok) parseEnvelope(result)
-  return result.text
-}
-
 export interface ListParams {
   limit?: number
   offset?: number

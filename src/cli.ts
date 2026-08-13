@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
-import { apiList, apiListCursor, apiRequest, apiRequestText } from './apiRequest.js'
+import { apiList, apiListCursor, apiRequest } from './apiRequest.js'
 import { getClient } from './client.js'
 import { getConfigPath, type GlobalOptions, maskKey, resolveConfig, writeApiKey } from './config.js'
 import { login, type LoginOptions } from './login.js'
-import { logout, type LogoutOptions } from './logout.js'
-import { action, fail, parseData } from './output.js'
+import { logout } from './logout.js'
+import { action, parseData } from './output.js'
 import { rawRequest } from './rawRequest.js'
 import { VERSION } from './version.js'
 
@@ -70,8 +70,7 @@ program
 program
   .command('logout')
   .description('Clear the locally stored API key for this profile')
-  .option('--revoke', 'Also delete the API key server-side (requires admin access to its space)')
-  .action(action(async (options: LogoutOptions) => logout(globals(), options)))
+  .action(action(async () => logout(globals())))
 
 // ---------------------------------------------------------------------------
 // Config
@@ -128,47 +127,6 @@ schemas
   .argument('<schema>', 'Schema id or slug')
   .action(action(async (schema: string) => client().schemas.get(schema)))
 
-schemas
-  .command('create')
-  .description('Create a contact, object, or event schema')
-  .requiredOption('--data <json>', 'Schema params as JSON ({type,name,namePlural,slug,description?})')
-  .option('--idempotency-key <key>', 'Make retries of this create safe')
-  .action(
-    action(async (options: { data: string; idempotencyKey?: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: '/schemas',
-        body: parseData(options.data),
-        idempotencyKey: options.idempotencyKey,
-      })
-    )
-  )
-
-schemas
-  .command('update')
-  .description('Update a schema (name, namePlural, description; type and slug are immutable)')
-  .argument('<schema>', 'Schema id or slug')
-  .requiredOption('--data <json>', 'Fields to change as JSON ({name?,namePlural?,description?})')
-  .action(
-    action(async (schema: string, options: { data: string }) =>
-      apiRequest(globals(), {
-        method: 'PATCH',
-        path: `/schemas/${encodeURIComponent(schema)}`,
-        body: parseData(options.data),
-      })
-    )
-  )
-
-schemas
-  .command('delete')
-  .description('Delete a schema and cascade its records')
-  .argument('<schema>', 'Schema id or slug')
-  .action(
-    action(async (schema: string) =>
-      apiRequest(globals(), { method: 'DELETE', path: `/schemas/${encodeURIComponent(schema)}` })
-    )
-  )
-
 const attributes = program.command('attributes').description('Read a schema attributes')
 
 addListOptions(
@@ -176,47 +134,6 @@ addListOptions(
 ).action(
   action(async (schema: string, options: ListOptions) => renderPage(client().attributes.list(schema, options), options))
 )
-
-attributes
-  .command('get')
-  .description('Get one attribute (base:<key>, an attribute id, or a raw key)')
-  .argument('<schema>', 'Schema id or slug')
-  .argument('<attribute>', 'base:<key>, attribute id, or key')
-  .action(action(async (schema: string, attribute: string) => client().attributes.get(schema, attribute)))
-
-attributes
-  .command('create')
-  .description('Add a stored attribute (--data) or an AI-generated evaluated attribute (--requirements)')
-  .argument('<schema>', 'Schema id or slug')
-  .option('--data <json>', 'Stored attribute as JSON ({key,label,description?,definition})')
-  .option('--requirements <text>', 'Natural-language prompt to generate an evaluated attribute (slow, billed)')
-  .option('--key <key>', 'Attribute key (with --requirements)')
-  .option('--label <label>', 'Attribute label (with --requirements)')
-  .option('--description <text>', 'Attribute description (with --requirements)')
-  .action(
-    action(
-      async (
-        schema: string,
-        options: { data?: string; requirements?: string; key?: string; label?: string; description?: string }
-      ) => {
-        const body =
-          options.requirements !== undefined
-            ? {
-                key: options.key,
-                label: options.label,
-                description: options.description ?? null,
-                requirements: options.requirements,
-              }
-            : parseData(options.data)
-        if (body === undefined) fail(new Error('Provide either --data (stored) or --requirements (evaluated).'))
-        return apiRequest(globals(), {
-          method: 'POST',
-          path: `/schemas/${encodeURIComponent(schema)}/attributes`,
-          body,
-        })
-      }
-    )
-  )
 
 // ---------------------------------------------------------------------------
 // Records
@@ -347,12 +264,6 @@ events
   )
 
 events
-  .command('get')
-  .description('Get a fired event by id')
-  .argument('<id>', 'Event id')
-  .action(action(async (id: string) => client().events.get(id)))
-
-events
   .command('list')
   .description('List an event schema history (cursor-paginated, newest first)')
   .requiredOption('--schema <schema>', 'Event schema id or slug')
@@ -377,7 +288,7 @@ events
 // Templates
 // ---------------------------------------------------------------------------
 
-const templates = program.command('templates').description('Manage and send stored message templates')
+const templates = program.command('templates').description('Read and send stored message templates')
 
 addListOptions(templates.command('list').description('List templates')).action(
   action(async (options: ListOptions) => apiList(globals(), '/templates', options))
@@ -389,62 +300,6 @@ templates
   .argument('<id>', 'Template id')
   .action(
     action(async (id: string) => apiRequest(globals(), { method: 'GET', path: `/templates/${encodeURIComponent(id)}` }))
-  )
-
-templates
-  .command('create')
-  .description('Create a template with raw editor content')
-  .requiredOption('--data <json>', 'Template params as JSON')
-  .option('--idempotency-key <key>', 'Make retries of this create safe')
-  .action(
-    action(async (options: { data: string; idempotencyKey?: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: '/templates',
-        body: parseData(options.data),
-        idempotencyKey: options.idempotencyKey,
-      })
-    )
-  )
-
-templates
-  .command('update')
-  .description('Update a template')
-  .argument('<id>', 'Template id')
-  .requiredOption('--data <json>', 'Fields to change as JSON')
-  .action(
-    action(async (id: string, options: { data: string }) =>
-      apiRequest(globals(), {
-        method: 'PATCH',
-        path: `/templates/${encodeURIComponent(id)}`,
-        body: parseData(options.data),
-      })
-    )
-  )
-
-templates
-  .command('delete')
-  .description('Delete a template')
-  .argument('<id>', 'Template id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'DELETE', path: `/templates/${encodeURIComponent(id)}` })
-    )
-  )
-
-templates
-  .command('duplicate')
-  .description('Duplicate a template')
-  .argument('<id>', 'Template id')
-  .option('--idempotency-key <key>', 'Make retries of this duplicate safe')
-  .action(
-    action(async (id: string, options: { idempotencyKey?: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: `/templates/${encodeURIComponent(id)}/duplicate`,
-        idempotencyKey: options.idempotencyKey,
-      })
-    )
   )
 
 templates
@@ -546,16 +401,6 @@ addListOptions(suppressions.command('list').description('List suppressions (admi
   )
 
 suppressions
-  .command('get')
-  .description('Get a suppression by id (admin key)')
-  .argument('<id>', 'Suppression id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'GET', path: `/contacts/suppressions/${encodeURIComponent(id)}` })
-    )
-  )
-
-suppressions
   .command('batch-add')
   .description('Bulk-suppress 1-100 email identifiers (admin key)')
   .requiredOption('--data <json>', 'JSON body ({suppressions:[{identifier,reason,notes?}]})')
@@ -646,16 +491,6 @@ workflows
   )
 
 workflows
-  .command('delete')
-  .description('Delete a workflow')
-  .argument('<id>', 'Workflow id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'DELETE', path: `/workflows/${encodeURIComponent(id)}` })
-    )
-  )
-
-workflows
   .command('trigger')
   .description('Trigger a workflow through its incoming-webhook step')
   .argument('<reference>', 'Incoming-webhook step reference id')
@@ -726,23 +561,6 @@ segments
   )
 
 segments
-  .command('update')
-  .description('Update a segment (name/description via --data, or --requirements to regenerate the condition)')
-  .argument('<id>', 'Segment id')
-  .option('--data <json>', 'Fields to change as JSON ({name?,description?})')
-  .option('--requirements <text>', 'Regenerate the condition from a new prompt (slow, billed)')
-  .action(
-    action(async (id: string, options: { data?: string; requirements?: string }) => {
-      const body = {
-        ...(options.data ? (parseData(options.data) as Record<string, unknown>) : {}),
-        ...(options.requirements !== undefined ? { requirements: options.requirements } : {}),
-      }
-      if (Object.keys(body).length === 0) fail(new Error('Provide --data and/or --requirements.'))
-      return apiRequest(globals(), { method: 'PATCH', path: `/segments/${encodeURIComponent(id)}`, body })
-    })
-  )
-
-segments
   .command('delete')
   .description('Delete a segment')
   .argument('<id>', 'Segment id')
@@ -756,7 +574,7 @@ segments
 // Broadcasts
 // ---------------------------------------------------------------------------
 
-const broadcasts = program.command('broadcasts').description('Create, schedule, and send mass emails')
+const broadcasts = program.command('broadcasts').description('Schedule and send mass emails')
 
 addListOptions(broadcasts.command('list').description('List broadcasts')).action(
   action(async (options: ListOptions) => apiList(globals(), '/broadcasts', options))
@@ -769,22 +587,6 @@ broadcasts
   .action(
     action(async (id: string) =>
       apiRequest(globals(), { method: 'GET', path: `/broadcasts/${encodeURIComponent(id)}` })
-    )
-  )
-
-broadcasts
-  .command('create')
-  .description('Create a broadcast')
-  .requiredOption('--data <json>', 'Broadcast params as JSON ({contactSchema, audience?, content?, ...})')
-  .option('--idempotency-key <key>', 'Make retries of this create safe')
-  .action(
-    action(async (options: { data: string; idempotencyKey?: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: '/broadcasts',
-        body: parseData(options.data),
-        idempotencyKey: options.idempotencyKey,
-      })
     )
   )
 
@@ -804,16 +606,6 @@ broadcasts
   )
 
 broadcasts
-  .command('delete')
-  .description('Delete a broadcast')
-  .argument('<id>', 'Broadcast id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'DELETE', path: `/broadcasts/${encodeURIComponent(id)}` })
-    )
-  )
-
-broadcasts
   .command('send')
   .description('Send a broadcast now, or at --data {scheduledFor}')
   .argument('<id>', 'Broadcast id')
@@ -824,21 +616,6 @@ broadcasts
         method: 'POST',
         path: `/broadcasts/${encodeURIComponent(id)}/send`,
         body: options.data ? parseData(options.data) : undefined,
-      })
-    )
-  )
-
-broadcasts
-  .command('audience-generate')
-  .description('Generate a custom-filter audience from a natural-language prompt (slow, billed)')
-  .argument('<id>', 'Broadcast id')
-  .requiredOption('--requirements <text>', 'Natural-language audience criteria')
-  .action(
-    action(async (id: string, options: { requirements: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: `/broadcasts/${encodeURIComponent(id)}/audience/generate`,
-        body: { requirements: options.requirements },
       })
     )
   )
@@ -865,7 +642,7 @@ broadcasts
 // Domains
 // ---------------------------------------------------------------------------
 
-const domains = program.command('domains').description('Manage sending domains (admin key)')
+const domains = program.command('domains').description('Read sending domains (admin key)')
 
 addListOptions(domains.command('list').description('List domains')).action(
   action(async (options: ListOptions) => apiList(globals(), '/domains', options))
@@ -879,106 +656,21 @@ domains
     action(async (id: string) => apiRequest(globals(), { method: 'GET', path: `/domains/${encodeURIComponent(id)}` }))
   )
 
-domains
-  .command('create')
-  .description('Add a sending domain and provision its DNS records')
-  .requiredOption('--data <json>', 'JSON body ({name, customReturnPath?})')
-  .option('--idempotency-key <key>', 'Make retries of this create safe')
-  .action(
-    action(async (options: { data: string; idempotencyKey?: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: '/domains',
-        body: parseData(options.data),
-        idempotencyKey: options.idempotencyKey,
-      })
-    )
-  )
-
-domains
-  .command('verify')
-  .description('Live-check DNS and refresh a domain verification state')
-  .argument('<id>', 'Domain id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'POST', path: `/domains/${encodeURIComponent(id)}/verify` })
-    )
-  )
-
-domains
-  .command('delete')
-  .description('Delete a domain')
-  .argument('<id>', 'Domain id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'DELETE', path: `/domains/${encodeURIComponent(id)}` })
-    )
-  )
-
 // ---------------------------------------------------------------------------
 // Senders
 // ---------------------------------------------------------------------------
 
-const senders = program.command('senders').description('Manage saved sender profiles')
+const senders = program.command('senders').description('Read saved sender profiles')
 
 addListOptions(senders.command('list').description('List senders')).action(
   action(async (options: ListOptions) => apiList(globals(), '/senders', options))
 )
 
-senders
-  .command('get')
-  .description('Get a sender by id')
-  .argument('<id>', 'Sender id')
-  .action(
-    action(async (id: string) => apiRequest(globals(), { method: 'GET', path: `/senders/${encodeURIComponent(id)}` }))
-  )
-
-senders
-  .command('create')
-  .description('Create a saved sender profile')
-  .requiredOption('--data <json>', 'JSON body ({name, code, domainId, description?})')
-  .option('--idempotency-key <key>', 'Make retries of this create safe')
-  .action(
-    action(async (options: { data: string; idempotencyKey?: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: '/senders',
-        body: parseData(options.data),
-        idempotencyKey: options.idempotencyKey,
-      })
-    )
-  )
-
-senders
-  .command('update')
-  .description('Update a sender')
-  .argument('<id>', 'Sender id')
-  .requiredOption('--data <json>', 'Fields to change as JSON')
-  .action(
-    action(async (id: string, options: { data: string }) =>
-      apiRequest(globals(), {
-        method: 'PATCH',
-        path: `/senders/${encodeURIComponent(id)}`,
-        body: parseData(options.data),
-      })
-    )
-  )
-
-senders
-  .command('delete')
-  .description('Delete a sender')
-  .argument('<id>', 'Sender id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'DELETE', path: `/senders/${encodeURIComponent(id)}` })
-    )
-  )
-
 // ---------------------------------------------------------------------------
 // Topics
 // ---------------------------------------------------------------------------
 
-const topics = program.command('topics').description('Manage communication topics')
+const topics = program.command('topics').description('Read communication topics')
 
 addListOptions(topics.command('list').description('List topics')).action(
   action(async (options: ListOptions) => apiList(globals(), '/topics', options))
@@ -990,147 +682,6 @@ topics
   .argument('<id>', 'Topic id')
   .action(
     action(async (id: string) => apiRequest(globals(), { method: 'GET', path: `/topics/${encodeURIComponent(id)}` }))
-  )
-
-topics
-  .command('create')
-  .description('Create a communication topic')
-  .requiredOption('--data <json>', 'JSON body ({name, description?, color?, private?})')
-  .option('--idempotency-key <key>', 'Make retries of this create safe')
-  .action(
-    action(async (options: { data: string; idempotencyKey?: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: '/topics',
-        body: parseData(options.data),
-        idempotencyKey: options.idempotencyKey,
-      })
-    )
-  )
-
-topics
-  .command('update')
-  .description('Update a topic (channel is immutable)')
-  .argument('<id>', 'Topic id')
-  .requiredOption('--data <json>', 'Fields to change as JSON')
-  .action(
-    action(async (id: string, options: { data: string }) =>
-      apiRequest(globals(), {
-        method: 'PATCH',
-        path: `/topics/${encodeURIComponent(id)}`,
-        body: parseData(options.data),
-      })
-    )
-  )
-
-topics
-  .command('delete')
-  .description('Delete a topic')
-  .argument('<id>', 'Topic id')
-  .option('--force', 'Bypass the in-use check')
-  .action(
-    action(async (id: string, options: { force?: boolean }) =>
-      apiRequest(globals(), {
-        method: 'DELETE',
-        path: `/topics/${encodeURIComponent(id)}`,
-        query: options.force ? { force: true } : undefined,
-      })
-    )
-  )
-
-// ---------------------------------------------------------------------------
-// Imports
-// ---------------------------------------------------------------------------
-
-const imports = program.command('imports').description('Bulk-import records from a CSV file')
-
-imports
-  .command('create')
-  .description('Start an import from an already-uploaded CSV file')
-  .argument('<schema>', 'Contact or object schema id or slug')
-  .requiredOption('--data <json>', 'JSON body ({fileUrl, byteSize, fileName?, defaultTags?, defaultSubscriptions?})')
-  .option('--idempotency-key <key>', 'Make retries of this create safe')
-  .action(
-    action(async (schema: string, options: { data: string; idempotencyKey?: string }) =>
-      apiRequest(globals(), {
-        method: 'POST',
-        path: `/schemas/${encodeURIComponent(schema)}/imports`,
-        body: parseData(options.data),
-        idempotencyKey: options.idempotencyKey,
-      })
-    )
-  )
-
-addListOptions(
-  imports.command('list').description("List a schema's imports").argument('<schema>', 'Schema id or slug')
-).action(
-  action(async (schema: string, options: ListOptions) =>
-    apiList(globals(), `/schemas/${encodeURIComponent(schema)}/imports`, options)
-  )
-)
-
-imports
-  .command('get')
-  .description('Get an import by id')
-  .argument('<id>', 'Import id')
-  .action(
-    action(async (id: string) => apiRequest(globals(), { method: 'GET', path: `/imports/${encodeURIComponent(id)}` }))
-  )
-
-imports
-  .command('cancel')
-  .description('Cancel a pending or running import')
-  .argument('<id>', 'Import id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'POST', path: `/imports/${encodeURIComponent(id)}/cancel` })
-    )
-  )
-
-imports
-  .command('download-failure-log')
-  .description("Download an import's failure-row CSV to stdout")
-  .argument('<id>', 'Import id')
-  .action(async (id: string) => {
-    try {
-      const csv = await apiRequestText(globals(), {
-        method: 'GET',
-        path: `/imports/${encodeURIComponent(id)}/failure-log`,
-      })
-      process.stdout.write(csv.endsWith('\n') ? csv : `${csv}\n`)
-    } catch (error) {
-      fail(error)
-    }
-  })
-
-// ---------------------------------------------------------------------------
-// API keys
-// ---------------------------------------------------------------------------
-
-const apiKeys = program.command('api-keys').description('Self-service API key management (admin key)')
-
-addListOptions(apiKeys.command('list').description('List API keys')).action(
-  action(async (options: ListOptions) => apiList(globals(), '/api-keys', options))
-)
-
-apiKeys
-  .command('create')
-  .description('Create an API key (the plaintext key is returned once)')
-  .option('--name <name>', 'Human-readable label')
-  .action(
-    action(async (options: { name?: string }) =>
-      apiRequest(globals(), { method: 'POST', path: '/api-keys', body: { name: options.name ?? null } })
-    )
-  )
-
-apiKeys
-  .command('delete')
-  .description('Delete an API key')
-  .argument('<id>', 'API key id')
-  .action(
-    action(async (id: string) =>
-      apiRequest(globals(), { method: 'DELETE', path: `/api-keys/${encodeURIComponent(id)}` })
-    )
   )
 
 // ---------------------------------------------------------------------------
