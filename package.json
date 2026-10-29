@@ -21,12 +21,13 @@
     "api"
   ],
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js",
+    "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
     "start": "node dist/cli.js",
-    "sdk:link": "cd ../maxclicks-node && npm run build && npm pack --pack-destination ../maxclicks-cli",
+    "sdk:link": "node scripts/link-sdk.mjs",
     "test": "echo 'No unit tests yet' && exit 0",
-    "prepublishOnly": "npm run build"
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check"
   },
   "author": "maxclicks",
   "license": "MIT",
@@ -43,7 +44,7 @@
   },
   "dependencies": {
     "commander": "^12.1.0",
-    "maxclicks": "file:maxclicks-1.0.0.tgz"
+    "maxclicks": "^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

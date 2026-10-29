@@ -3,7 +3,7 @@ import { fail } from './output.js'
 
 /**
  * Escape hatch: makes a raw authenticated request to any API path and returns
- * `{ status, body }`. Used by `maxclicks api <method> <path>`.
+ * `{ status, body }`, exiting non-zero on a non-2xx status. Used by `maxclicks api <method> <path>`.
  */
 export async function rawRequest(
   options: GlobalOptions,
@@ -30,5 +30,6 @@ export async function rawRequest(
   } catch {
     parsed = text
   }
+  if (!response.ok) process.exitCode = 1
   return { status: response.status, body: parsed }
 }

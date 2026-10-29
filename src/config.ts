@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -7,6 +7,7 @@ const DEFAULT_WEB_ORIGIN = 'https://app.maxclicks.ai'
 
 export const LOGIN_TIMEOUT_MILLISECONDS = 5 * 60 * 1000
 export const LOGIN_POLL_INTERVAL_MILLISECONDS = 2 * 1000
+export const LOGIN_CALLBACK_MAXIMUM_BODY_BYTES = 16 * 1024
 export const DEFAULT_LIST_PAGE_SIZE = 50
 export const CREATE_CLI_PAIRING_PATH = '/any/account/create-cli-pairing'
 export const CLAIM_CLI_PAIRING_PATH = '/any/account/claim-cli-pairing'
@@ -51,13 +52,18 @@ function readConfigFile(): Record<string, Profile> {
   }
 }
 
+/** `mode` applies only when a file is created, so an existing file is narrowed again after every write. */
+function writeConfigFile(all: Record<string, Profile>): string {
+  mkdirSync(configDir(), { recursive: true, mode: 0o700 })
+  writeFileSync(getConfigPath(), JSON.stringify(all, null, 2) + '\n', { mode: 0o600 })
+  chmodSync(getConfigPath(), 0o600)
+  return getConfigPath()
+}
+
 function writeProfile(profile: string, patch: (current: Profile) => Profile): string {
-  const dir = configDir()
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const all = readConfigFile()
   all[profile] = patch(all[profile] ?? {})
-  writeFileSync(getConfigPath(), JSON.stringify(all, null, 2) + '\n', { mode: 0o600 })
-  return getConfigPath()
+  return writeConfigFile(all)
 }
 
 /** Persists an API key (and optional base URL) for a profile at ~/.config/maxclicks/config.json. */
@@ -80,12 +86,9 @@ export function writeSession(
 
 /** Removes a profile's stored credentials entirely. */
 export function clearProfile(profile: string): string {
-  const dir = configDir()
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const all = readConfigFile()
   delete all[profile]
-  writeFileSync(getConfigPath(), JSON.stringify(all, null, 2) + '\n', { mode: 0o600 })
-  return getConfigPath()
+  return writeConfigFile(all)
 }
 
 /** Resolves the effective config: flags override env, which overrides the config file. */

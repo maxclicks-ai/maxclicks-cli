@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
+import { randomUUID } from 'node:crypto'
 import { apiList, apiListCursor, apiRequest } from './apiRequest.js'
 import { getClient } from './client.js'
 import { getConfigPath, type GlobalOptions, maskKey, resolveConfig, writeApiKey } from './config.js'
@@ -161,17 +162,9 @@ records
   .requiredOption('--data <json>', 'Flat record fields as JSON')
   .option('--idempotency-key <key>', 'Make retries of this create safe (replays the original record)')
   .action(
-    action(async (schema: string, options: { data: string; idempotencyKey?: string }) => {
-      const body = parseData(options.data)
-      if (options.idempotencyKey)
-        return apiRequest(globals(), {
-          method: 'POST',
-          path: `/schemas/${encodeURIComponent(schema)}/records`,
-          body,
-          idempotencyKey: options.idempotencyKey,
-        })
-      return client().records.create(schema, body as never)
-    })
+    action(async (schema: string, options: { data: string; idempotencyKey?: string }) =>
+      client().records.create(schema, parseData(options.data) as never, { idempotencyKey: options.idempotencyKey })
+    )
   )
 
 records
@@ -181,17 +174,9 @@ records
   .requiredOption('--data <json>', 'Flat record fields as JSON')
   .option('--idempotency-key <key>', 'Make retries of this upsert safe (replays the original record)')
   .action(
-    action(async (schema: string, options: { data: string; idempotencyKey?: string }) => {
-      const body = parseData(options.data)
-      if (options.idempotencyKey)
-        return apiRequest(globals(), {
-          method: 'POST',
-          path: `/schemas/${encodeURIComponent(schema)}/records/upsert`,
-          body,
-          idempotencyKey: options.idempotencyKey,
-        })
-      return client().records.upsert(schema, body as never)
-    })
+    action(async (schema: string, options: { data: string; idempotencyKey?: string }) =>
+      client().records.upsert(schema, parseData(options.data) as never, { idempotencyKey: options.idempotencyKey })
+    )
   )
 
 records
@@ -208,10 +193,44 @@ records
 
 records
   .command('delete')
-  .description('Delete a record by id')
+  .description('Request deletion of a record by id; prints the deletion operation and its status')
   .argument('<schema>', 'Schema id or slug')
   .argument('<id>', 'Record id')
-  .action(action(async (schema: string, id: string) => client().records.delete(schema, id)))
+  .option(
+    '--idempotency-key <key>',
+    'Identifies this deletion attempt; reuse it to retry safely (generated if omitted)'
+  )
+  .action(
+    action(async (schema: string, id: string, options: { idempotencyKey?: string }) => {
+      const idempotencyKey = options.idempotencyKey ?? randomUUID()
+      const deletion = await apiRequest(globals(), {
+        method: 'DELETE',
+        path: `/schemas/${encodeURIComponent(schema)}/records/${encodeURIComponent(id)}`,
+        idempotencyKey,
+      })
+      return { idempotencyKey, deletion }
+    })
+  )
+
+records
+  .command('deletion-status')
+  .description('Get the status of a record deletion operation')
+  .argument('<operationId>', 'Deletion operation id from `records delete`')
+  .action(
+    action(async (operationId: string) =>
+      apiRequest(globals(), { method: 'GET', path: `/record-deletions/${encodeURIComponent(operationId)}` })
+    )
+  )
+
+records
+  .command('cancel-deletion')
+  .description('Cancel a record deletion before the record is removed')
+  .argument('<operationId>', 'Deletion operation id from `records delete`')
+  .action(
+    action(async (operationId: string) =>
+      apiRequest(globals(), { method: 'POST', path: `/record-deletions/${encodeURIComponent(operationId)}/cancel` })
+    )
+  )
 
 addListOptions(
   records
@@ -264,6 +283,33 @@ events
   )
 
 events
+  .command('status')
+  .description("Get an accepted event's readiness (use the id from the fire receipt)")
+  .argument('<schema>', 'Event schema id or slug')
+  .argument('<id>', 'Event id from the acceptance receipt')
+  .action(
+    action(async (schema: string, id: string) =>
+      apiRequest(globals(), {
+        method: 'GET',
+        path: `/events/${encodeURIComponent(schema)}/${encodeURIComponent(id)}/status`,
+      })
+    )
+  )
+
+events
+  .command('identify')
+  .description('Bind an anonymous browser identity to a contact (from your authenticated backend)')
+  .requiredOption(
+    '--data <json>',
+    'JSON body ({sourceId, subjectSchemaId, anonymousId, contactId, operationId, expectedAliasRevision})'
+  )
+  .action(
+    action(async (options: { data: string }) =>
+      apiRequest(globals(), { method: 'POST', path: '/event-identities', body: parseData(options.data) })
+    )
+  )
+
+events
   .command('list')
   .description('List an event schema history (cursor-paginated, newest first)')
   .requiredOption('--schema <schema>', 'Event schema id or slug')
@@ -307,10 +353,20 @@ templates
   .description('Send a template with a data payload')
   .argument('<templateId>', 'Template id')
   .requiredOption('--data <json>', 'Template data payload as JSON')
+  .option(
+    '--idempotency-key <key>',
+    'Identifies this send; reuse it to retry without sending twice (generated if omitted)'
+  )
   .action(
-    action(async (templateId: string, options: { data: string }) => {
-      await client().templates.send(templateId, { data: parseData(options.data) as Record<string, unknown> })
-      return { sent: true, templateId }
+    action(async (templateId: string, options: { data: string; idempotencyKey?: string }) => {
+      const idempotencyKey = options.idempotencyKey ?? randomUUID()
+      const result = await client().templates.send(
+        templateId,
+        { data: parseData(options.data) as Record<string, unknown> },
+        { idempotencyKey }
+      )
+      if (result.status === 'failed') process.exitCode = 1
+      return { templateId, idempotencyKey, ...result }
     })
   )
 
@@ -495,9 +551,12 @@ workflows
   .description('Trigger a workflow through its incoming-webhook step')
   .argument('<reference>', 'Incoming-webhook step reference id')
   .option('--data <json>', 'Run input payload as JSON')
+  .option('--idempotency-key <key>', 'Reuse to retry this trigger without starting a second run')
   .action(
-    action(async (reference: string, options: { data?: string }) => {
-      await client().workflows.trigger(reference, options.data ? parseData(options.data) : {})
+    action(async (reference: string, options: { data?: string; idempotencyKey?: string }) => {
+      await client().workflows.trigger(reference, options.data ? parseData(options.data) : {}, {
+        idempotencyKey: options.idempotencyKey,
+      })
       return { triggered: true, reference }
     })
   )
@@ -610,12 +669,14 @@ broadcasts
   .description('Send a broadcast now, or at --data {scheduledFor}')
   .argument('<id>', 'Broadcast id')
   .option('--data <json>', 'Optional JSON body ({scheduledFor})')
+  .option('--idempotency-key <key>', 'Reuse to retry this send without sending the broadcast twice')
   .action(
-    action(async (id: string, options: { data?: string }) =>
+    action(async (id: string, options: { data?: string; idempotencyKey?: string }) =>
       apiRequest(globals(), {
         method: 'POST',
         path: `/broadcasts/${encodeURIComponent(id)}/send`,
         body: options.data ? parseData(options.data) : undefined,
+        idempotencyKey: options.idempotencyKey,
       })
     )
   )
@@ -708,7 +769,7 @@ program
     action(async (query?: string) => ({
       documentation: 'https://docs.maxclicks.ai',
       apiReference: 'https://docs.maxclicks.ai/api',
-      openapi: 'https://maxclicks.ai/openapi.json',
+      openapi: 'https://docs.maxclicks.ai/api-spec/openapi.json',
       llmsText: 'https://maxclicks.ai/llms.txt',
       ...(query
         ? { note: `Search the documentation for "${query}", or fetch llms-full.txt for the full corpus.` }

@@ -1,10 +1,11 @@
-import { randomBytes, createHash } from 'node:crypto'
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import { hostname, platform } from 'node:os'
 import {
   CLAIM_CLI_PAIRING_PATH,
   CREATE_CLI_PAIRING_PATH,
+  LOGIN_CALLBACK_MAXIMUM_BODY_BYTES,
   LOGIN_POLL_INTERVAL_MILLISECONDS,
   LOGIN_TIMEOUT_MILLISECONDS,
   resolveConfig,
@@ -39,7 +40,7 @@ export async function login(globals: GlobalOptions, options: LoginOptions): Prom
     fail(new Error(`Failed to start login (${pairResponse.status}): ${(await pairResponse.text()) || 'unknown error'}`))
   const { pairingId } = (await pairResponse.json()) as { pairingId: string }
 
-  const callback = useBrowser ? await startCallbackServer() : null
+  const callback = useBrowser ? await startCallbackServer(state, new URL(webOrigin).origin) : null
 
   const authorizeUrl = new URL('/cli/authorize', webOrigin)
   authorizeUrl.searchParams.set('pairingId', pairingId)
@@ -127,7 +128,11 @@ interface CallbackServer {
   close: () => void
 }
 
-function startCallbackServer(): Promise<CallbackServer> {
+/**
+ * The loopback listener accepts a key only from the web app's origin and only with this login's state, so a page
+ * open in another tab cannot hand the CLI a key for a workspace the user never chose. Polling stays the fallback.
+ */
+function startCallbackServer(state: string, webOrigin: string): Promise<CallbackServer> {
   return new Promise((resolve, reject) => {
     let resolveKey: (value: MintedKey) => void = () => {}
     let rejectKey: (error: Error) => void = () => {}
@@ -139,9 +144,15 @@ function startCallbackServer(): Promise<CallbackServer> {
 
     const server: Server = createServer((request, response) => {
       const corsHeaders = {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': webOrigin,
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
+        Vary: 'Origin',
+      }
+
+      if (request.headers.origin !== webOrigin) {
+        response.writeHead(403, corsHeaders).end()
+        return
       }
 
       if (request.method === 'OPTIONS') {
@@ -155,11 +166,15 @@ function startCallbackServer(): Promise<CallbackServer> {
       }
 
       let body = ''
-      request.on('data', chunk => (body += chunk))
+      request.on('data', chunk => {
+        body += chunk
+        if (body.length > LOGIN_CALLBACK_MAXIMUM_BODY_BYTES) request.destroy()
+      })
       request.on('end', () => {
         try {
-          const parsed = JSON.parse(body) as { key?: string; apiKeyId?: string }
-          if (!parsed.key || !parsed.apiKeyId) throw new Error('Missing key in callback payload.')
+          const parsed = JSON.parse(body) as { key?: string; apiKeyId?: string; state?: string }
+          if (!parsed.key || !parsed.apiKeyId || !matchesState(parsed.state, state))
+            throw new Error('Missing key or state in callback payload.')
           response.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: true }))
           resolveKey({ key: parsed.key, apiKeyId: parsed.apiKeyId })
         } catch {
@@ -190,6 +205,13 @@ function startCallbackServer(): Promise<CallbackServer> {
       })
     })
   })
+}
+
+function matchesState(presented: string | undefined, expected: string): boolean {
+  if (typeof presented !== 'string') return false
+  const presentedHash = createHash('sha256').update(presented).digest()
+  const expectedHash = createHash('sha256').update(expected).digest()
+  return timingSafeEqual(presentedHash, expectedHash)
 }
 
 function openBrowser(url: string): void {
